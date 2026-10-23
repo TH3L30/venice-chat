@@ -1,0 +1,7 @@
+.env
+*.key
+__pycache__/
+.venv/
+venv/
+.venice_profile/
+history/
