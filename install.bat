@@ -21,17 +21,26 @@ echo [1/3] Python detected:
 python --version
 
 :: 2. Install dependencies
-echo [2/3] Installing dependencies from requirements.txt...
+echo [2/4] Installing dependencies from requirements.txt...
 python -m pip install -q -r "%~dp0requirements.txt"
 if %ERRORLEVEL% neq 0 (
     echo [!] Warning: pip install encountered issues; continuing...
 )
 
-:: 3. Setup global command in WindowsApps (always in User PATH)
+:: 3. Check for OpenCode CLI (needed for free offline DeepSeek V4.1 Flash)
+where opencode >nul 2>nul
+if %ERRORLEVEL% neq 0 (
+    echo [3/4] Installing OpenCode CLI for free zero-balance engine...
+    powershell -ExecutionPolicy Bypass -Command "irm https://opencode.ai/install.ps1 | iex" 2>nul
+) else (
+    echo [3/4] OpenCode CLI detected.
+)
+
+:: 4. Setup global command in WindowsApps (always in User PATH)
 set "TARGET_DIR=%LOCALAPPDATA%\Microsoft\WindowsApps"
 set "CMD_FILE=%TARGET_DIR%\venice.cmd"
 
-echo [3/3] Creating global 'venice' command at %CMD_FILE%...
+echo [4/4] Creating global 'venice' command at %CMD_FILE%...
 (
     echo @echo off
     echo python "%~dp0venice_chat.py" %%*

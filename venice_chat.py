@@ -94,6 +94,40 @@ class VeniceClient:
 
     def _stream_free(self, user_prompt: str) -> Generator[str, None, None]:
         """Free Engine: routes through local zero-cost DeepSeek V4.1 Flash pipeline."""
+        # 1. Resolve opencode executable cross-platform
+        opencode_bin = shutil.which("opencode") or shutil.which("opencode.cmd") or shutil.which("opencode.exe")
+
+        # Check standard Windows paths if not yet in PATH
+        if not opencode_bin and sys.platform == "win32":
+            local_appdata = os.environ.get("LOCALAPPDATA", "")
+            user_profile = os.environ.get("USERPROFILE", "")
+            possible_paths = [
+                Path(local_appdata) / "Programs" / "opencode" / "bin" / "opencode.cmd",
+                Path(local_appdata) / "Programs" / "opencode" / "opencode.exe",
+                Path(user_profile) / ".opencode" / "bin" / "opencode.cmd",
+                Path(user_profile) / ".opencode" / "bin" / "opencode.exe",
+            ]
+            for p in possible_paths:
+                if p.exists():
+                    opencode_bin = str(p)
+                    break
+
+        if not opencode_bin:
+            # Automatic fallback to Venice API if key is present
+            if self.api_key:
+                yield "[Notice]: OpenCode not found on system PATH. Routing via Venice API...\n\n"
+                yield from self._stream_api(user_prompt)
+                return
+            else:
+                install_cmd = 'powershell -c "irm https://opencode.ai/install.ps1 | iex"' if sys.platform == "win32" else 'curl -fsSL https://opencode.ai/install | bash'
+                yield (
+                    "[Free Engine Notice]: OpenCode CLI is required for offline zero-balance mode.\n"
+                    f"To install it on {sys.platform}, open a terminal and run:\n"
+                    f"  {install_cmd}\n\n"
+                    "Or configure your VENICE_API_KEY in .env and switch to API mode with: /backend api"
+                )
+                return
+
         try:
             full_prompt = ""
             if self.system_prompt:
@@ -105,13 +139,14 @@ class VeniceClient:
                 full_prompt += f"{role}: {msg['content']}\n\n"
             full_prompt += "Assistant: "
 
-            cmd = ["opencode", "run", "-m", "opencode/deepseek-v4.1-flash-free", full_prompt]
+            cmd = [opencode_bin, "run", "-m", "opencode/deepseek-v4.1-flash-free", full_prompt]
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
                 bufsize=1,
+                shell=(sys.platform == "win32"),
             )
 
             assistant_reply = ""
