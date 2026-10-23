@@ -28,6 +28,14 @@ cd venice-chat
 ./install.sh
 ```
 
+### Windows (Command Prompt — cmd.exe)
+
+```cmd
+git clone https://github.com/TH3L30/venice-chat.git
+cd venice-chat
+install.bat
+```
+
 ### Windows (PowerShell)
 
 ```powershell
@@ -36,7 +44,9 @@ cd venice-chat
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-Once installed, the global command `venice` is available from anywhere in your terminal!
+*(You can also run `venice.cmd` directly in the folder without installing).*
+
+Once installed, the global command `venice` is available from anywhere in your terminal or Command Prompt!
 
 ---
 

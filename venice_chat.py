@@ -493,12 +493,17 @@ def run_uninstall(non_interactive: bool = False):
     # 1. Stop any background bridges
     stop_background_bridge()
 
-    # 2. Potential global binary locations
+    # 2. Potential global binary locations (macOS, Linux, Windows)
     candidate_bins = [
         Path.home() / ".local" / "bin" / "venice",
         Path("/usr/local/bin/venice"),
         Path.home() / "bin" / "venice",
     ]
+
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    if local_appdata:
+        candidate_bins.append(Path(local_appdata) / "Microsoft" / "WindowsApps" / "venice.cmd")
+        candidate_bins.append(Path(local_appdata) / "Microsoft" / "WindowsApps" / "venice.bat")
 
     removed_bins = []
     for bin_path in candidate_bins:
