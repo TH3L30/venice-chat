@@ -19,19 +19,21 @@ try {
 
 # 2. Install dependencies
 Write-Host "[2/3] Installing dependencies..." -ForegroundColor Yellow
-python -m pip install -q -r "$scriptDir\requirements.txt"
+$reqFile = Join-Path $scriptDir "requirements.txt"
+python -m pip install -q -r $reqFile
 
 # 3. Create CMD wrapper in user path
 $targetDir = "$env:LOCALAPPDATA\Microsoft\WindowsApps"
-$cmdFile = "$targetDir\venice.cmd"
+$cmdFile = Join-Path $targetDir "venice.cmd"
+$pyScript = Join-Path $scriptDir "venice_chat.py"
 
-$batchContent = "@echo off`r`npython `"$scriptDir\venice_chat.py`" %*"
-Set-Content -Path $cmdFile -Value $batchContent
+$batchContent = "@echo off`r`npython `"$pyScript`" %*"
+[System.IO.File]::WriteAllText($cmdFile, $batchContent)
 
 Write-Host "[3/3] Created global command 'venice' at $cmdFile" -ForegroundColor Green
 Write-Host ""
 Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host "  ✔ Venice Chat successfully installed for Windows!" -ForegroundColor Green
+Write-Host "  [OK] Venice Chat successfully installed for Windows!" -ForegroundColor Green
 Write-Host "  Run it anywhere by simply typing: venice" -ForegroundColor Yellow
 Write-Host "  To uninstall completely, run: venice uninstall" -ForegroundColor Yellow
 Write-Host "==========================================================" -ForegroundColor Cyan
