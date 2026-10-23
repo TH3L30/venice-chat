@@ -17,27 +17,19 @@ if ! command -v python3 &>/dev/null; then
     exit 1
 fi
 
-echo "[1/4] Checking Python environment: $(python3 --version)"
+echo "[1/3] Checking Python environment: $(python3 --version)"
 
 # 2. Install Python dependencies
-echo "[2/5] Installing dependencies from requirements.txt..."
+echo "[2/3] Installing dependencies from requirements.txt..."
 python3 -m pip install -q -r "$SCRIPT_DIR/requirements.txt" || {
     echo "Warning: pip install encountered issues; continuing..."
 }
 
-# 3. Check for OpenCode CLI (needed for zero-balance engine)
-if ! command -v opencode &>/dev/null; then
-    echo "[3/5] Installing OpenCode CLI for free zero-balance engine..."
-    curl -fsSL https://opencode.ai/install | bash 2>/dev/null || true
-else
-    echo "[3/5] OpenCode CLI detected."
-fi
-
-# 4. Setup bin directory
+# 3. Setup bin directory
 mkdir -p "$BIN_DIR"
 
-# 5. Create global executable wrapper
-echo "[4/5] Creating global 'venice' command at $BIN_DIR/venice..."
+# 4. Create global executable wrapper
+echo "[3/3] Creating global 'venice' command at $BIN_DIR/venice..."
 WRAPPER="$BIN_DIR/venice"
 cat << EOF > "$WRAPPER"
 #!/usr/bin/env bash
@@ -45,8 +37,12 @@ exec python3 "$SCRIPT_DIR/venice_chat.py" "\$@"
 EOF
 chmod +x "$WRAPPER"
 
+# 5. Check for .env file
+if [ ! -f "$SCRIPT_DIR/.env" ] && [ -f "$SCRIPT_DIR/.env.example" ]; then
+    cp "$SCRIPT_DIR/.env.example" "$SCRIPT_DIR/.env"
+fi
+
 # 6. Verify PATH
-echo "[5/5] Verifying PATH..."
 if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
     echo ""
     echo "Notice: $BIN_DIR is not in your current PATH."

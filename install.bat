@@ -21,35 +21,33 @@ echo [1/3] Python detected:
 python --version
 
 :: 2. Install dependencies
-echo [2/4] Installing dependencies from requirements.txt...
+echo [2/3] Installing dependencies from requirements.txt...
 python -m pip install -q -r "%~dp0requirements.txt"
 if %ERRORLEVEL% neq 0 (
     echo [!] Warning: pip install encountered issues; continuing...
 )
 
-:: 3. Check for OpenCode CLI (needed for free offline DeepSeek V4.1 Flash)
-where opencode >nul 2>nul
-if %ERRORLEVEL% neq 0 (
-    echo [3/4] Installing OpenCode CLI for free zero-balance engine...
-    powershell -ExecutionPolicy Bypass -Command "irm https://opencode.ai/install.ps1 | iex" 2>nul
-) else (
-    echo [3/4] OpenCode CLI detected.
-)
-
-:: 4. Setup global command in WindowsApps (always in User PATH)
+:: 3. Setup global command in WindowsApps (always in User PATH)
 set "TARGET_DIR=%LOCALAPPDATA%\Microsoft\WindowsApps"
 set "CMD_FILE=%TARGET_DIR%\venice.cmd"
 
-echo [4/4] Creating global 'venice' command at %CMD_FILE%...
+echo [3/3] Creating global 'venice' command at %CMD_FILE%...
 (
     echo @echo off
     echo python "%~dp0venice_chat.py" %%*
 ) > "%CMD_FILE%"
 
+:: 4. Check for .env file
+if not exist "%~dp0.env" (
+    if exist "%~dp0.env.example" (
+        copy "%~dp0.env.example" "%~dp0.env" >nul
+    )
+)
+
 echo.
 echo ==========================================================
 echo   [OK] Venice Chat successfully installed for Windows!
-echo   Open a new Command Prompt or PowerShell and type: venice
+echo   Run it anywhere by simply typing: venice
 echo   To uninstall completely, run: venice uninstall
 echo ==========================================================
 echo.

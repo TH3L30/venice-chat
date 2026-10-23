@@ -1,20 +1,22 @@
 # Venice Chat 🚀
 
-> **Uncensored, Privacy-First Terminal AI Interface & Local OpenAI-Compatible Bridge for Venice AI & DeepSeek V4.1 Flash**
+> **Uncensored, Privacy-First Terminal AI Interface & Local OpenAI Bridge for Venice AI**
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Cross-Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-purple.svg)]()
 
+A pure, standalone terminal client and local OpenAI-compatible bridge that connects directly to **Venice AI** (`https://api.venice.ai/api/v1`). No third-party agent layers or external tool runtimes required.
+
 ---
 
-## Highlights
+## Features
 
-- ⚡ **Zero-Balance Inference (`free` mode):** Chat with **DeepSeek V4.1 Flash (Uncensored)** with $0 balance, no API keys, and no credit card required.
-- 🌉 **Automatic Local OpenAI Bridge:** Starting `venice` automatically launches an OpenAI-compatible API bridge in the background so tools like **OpenCode**, **Cursor**, **Aider**, or **Cline** can connect to `http://127.0.0.1:8088/v1` seamlessly.
-- 🔌 **Venice API Transport Compliant:** Strict adherence to `VENICE_TRANSPORT_SPEC.md` (handles streaming usage chunk without choices, logs `CF-RAY`, and forwards `venice_parameters`).
-- 🎨 **Rich Terminal UI (TUI):** Real-time streaming tokens, markdown rendering, syntax highlighting, conversation history, and in-chat slash commands.
-- 🧹 **Complete Clean Uninstaller:** Run `venice uninstall` anytime to cleanly remove the global command and restore your system to normal.
+- ⚡ **Direct Venice AI Inference:** Directly speaks the official Venice Chat Transport Protocol (`VENICE_TRANSPORT_SPEC.md`).
+- 🔓 **Uncensored Models Out-of-the-Box:** Includes `deepseek-v4-1-flash`, `zai-org-glm-5-2`, `venice-uncensored-1-2`, and `grok-4-7`.
+- 🌉 **Automatic Local OpenAI Bridge:** Running `venice` starts an OpenAI-compatible bridge in the background (default port 8080/8088), allowing any tool or editor to connect to `http://127.0.0.1:8088/v1`.
+- 🎨 **Rich Terminal UI:** Real-time token streaming, Markdown formatting, syntax highlighting, and conversation history.
+- 🧹 **Complete Clean Uninstaller:** Run `venice uninstall` anytime to cleanly remove the command and restore your system to normal.
 
 ---
 
@@ -50,6 +52,26 @@ Once installed, the global command `venice` is available from anywhere in your t
 
 ---
 
+## Configuration
+
+Get your Venice API Key at: **[https://venice.ai/settings/api](https://venice.ai/settings/api)**
+
+When you run `venice` for the first time, it will prompt you for your key if `.env` is not yet configured, or you can add it directly to `.env`:
+
+```env
+VENICE_API_KEY=VENICE_INFERENCE_KEY_...
+VENICE_BASE_URL=https://api.venice.ai/api/v1
+VENICE_MODEL=deepseek-v4-1-flash
+ENABLE_WEB_SEARCH=auto
+```
+
+You can also update your key at any time inside the chat using the `/key` command:
+```text
+You ❯ /key VENICE_INFERENCE_KEY_...
+```
+
+---
+
 ## Usage
 
 ### 1. Launch Interactive Chat (Starts Bridge + Launches CLI)
@@ -60,54 +82,28 @@ Simply run:
 venice
 ```
 
-You will see the step-by-step startup process:
+You will see the startup process:
 ```text
-[1/3] ⚙ Checking environment & dependencies...
-      ✔ Environment verified (Python 3, OpenCode pipeline)
+[1/3] ⚙ Checking Venice environment & dependencies...
+      ✔ Environment verified (Python 3, HTTPX, Venice Transport)
 [2/3] 🚀 Starting Venice Local Bridge on port 8080...
-      ✔ Local bridge active on http://127.0.0.1:8088/v1 (OpenCode can connect)
+      ✔ Local bridge active on http://127.0.0.1:8088/v1 (OpenAI Compatible)
 [3/3] 💬 Launching Venice Terminal Chat...
 ```
 
 ### 2. One-Shot Prompt (CLI Mode)
 
-Run a direct question without entering the interactive loop:
-
 ```bash
 venice -p "Explain quantum computing in one sentence"
 ```
 
-### 3. Connect External Tools (OpenCode, Cursor, Aider)
+### 3. Connect External Tools to the Local Bridge
 
-While `venice` is running (or via `venice --serve`), you can point any OpenAI-compatible tool to:
+While `venice` is running (or via `venice --serve`), you can point any external application to:
 
 * **Base URL:** `http://127.0.0.1:8088/v1` (or whichever port the bridge reports)
 * **API Key:** `any-key` (or your Venice key)
-* **Model:** `deepseek-v4.1-flash` or `default`
-
-#### OpenCode Configuration Example (`~/.config/opencode/opencode.json`):
-```json
-{
-  "model": "venice-local/deepseek-v4.1-flash",
-  "providers": {
-    "venice-local": {
-      "name": "Venice Local Bridge",
-      "package": "@opencode/ai/providers/openai-compatible",
-      "settings": {
-        "baseURL": "http://127.0.0.1:8088/v1"
-      }
-    }
-  }
-}
-```
-
-### 4. Standalone Bridge Server Mode
-
-If you only want the local OpenAI server running in the background without entering the chat UI:
-
-```bash
-venice --serve
-```
+* **Model:** `deepseek-v4-1-flash` or `default`
 
 ---
 
@@ -118,8 +114,8 @@ While in interactive mode, use these slash commands:
 | Command | Description |
 |---|---|
 | `/help` | Display interactive command help |
-| `/model <name>` | Switch active model (`deepseek-v4.1-flash`, `zai-org-glm-5-2`, `venice-uncensored-1-2`, `default`) |
-| `/backend <free\|api>` | Switch between the **zero-balance** engine and paid Venice API |
+| `/model <name>` | Switch active Venice model (`deepseek-v4-1-flash`, `zai-org-glm-5-2`, `venice-uncensored-1-2`) |
+| `/key <api_key>` | Update your Venice API key |
 | `/search <auto\|on\|off>` | Toggle Venice live web search parameter |
 | `/system <prompt>` | Set custom system prompt for the conversation |
 | `/clear` | Clear active conversation history |
@@ -128,37 +124,26 @@ While in interactive mode, use these slash commands:
 
 ---
 
-## Authentication & Session Management
+## Available Venice Models
 
-Venice Chat supports three backends:
-
-1. **Free Local Engine (`free` mode - Default):**
-   * **Authentication:** **None required.**
-   * Runs DeepSeek V4.1 Flash via the local client inference pipeline. No cookies, no token expiry, and no balance required.
-2. **Venice Official API (`api` mode):**
-   * **Authentication:** `Authorization: Bearer <VENICE_API_KEY>`
-   * Reads from your `.env` file (`VENICE_API_KEY`). Keys are permanent unless revoked at [venice.ai/settings/api](https://venice.ai/settings/api).
-3. **Venice Web Session (Cookies & Clerk):**
-   * **How it works:** Venice's web chat uses Clerk authentication (`__session` cookie + short-lived Clerk JWT bearer tokens).
-   * **How to refresh if expired:** Simply open [venice.ai/chat/agent](https://venice.ai/chat/agent) in your browser. Clerk automatically rotates and refreshes your session tokens seamlessly.
+- `deepseek-v4-1-flash` — DeepSeek V4.1 Flash (Uncensored, 1M context, multimodal & code-optimized)
+- `zai-org-glm-5-2` — Zhiyuan AI GLM 5.2 (Advanced reasoning & code)
+- `venice-uncensored-1-2` — Venice Uncensored 1.2 (Most Uncensored)
+- `default` — Venice Default Trait
+- `deepseek-v4-pro` — DeepSeek V4 Pro (1.6T MoE, High Reasoning)
+- `grok-4-7` — Grok 4.7 (Most Intelligent Trait)
 
 ---
 
 ## Uninstallation
 
-To completely remove the global command and restore your system to its original state:
+To completely remove the global command and restore your system:
 
 ```bash
 venice uninstall
 ```
 
-Or run non-interactively:
-
-```bash
-venice uninstall -y
-```
-
-This removes all global executables (`~/.local/bin/venice` or Windows CMD wrappers), cleans runtime caches, and restores your shell environment cleanly.
+*(Or run non-interactively with `venice uninstall -y` or `uninstall.bat` on Windows).*
 
 ---
 

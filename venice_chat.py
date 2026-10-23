@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """
-Venice Chat — Terminal Interface & Local OpenAI Bridge for Venice AI & DeepSeek V4.1 Flash
-Conformant to VENICE_TRANSPORT_SPEC.md.
+Venice Chat — Pure Venice AI Terminal Interface & Local OpenAI Bridge
+Conformant to VENICE_TRANSPORT_SPEC.md (spec version 20261022.222446).
+
+Directly interacts with Venice AI (https://api.venice.ai/api/v1).
+No external CLI dependencies. Pure Python + HTTPX + Rich.
 
 Commands:
-  venice               Starts local bridge server + launches interactive terminal chat
+  venice               Starts local bridge + launches interactive terminal chat
   venice -p "prompt"   One-shot prompt execution
   venice --serve       Runs the OpenAI bridge server as a standalone daemon (port 8080)
   venice uninstall     Completely uninstalls the global command and cleans up system
@@ -15,25 +18,25 @@ import sys
 import json
 import time
 import shutil
-import signal
 import argparse
 import threading
-import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Generator, Optional
 
+import httpx
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
-from rich.spinner import Spinner
-from rich.live import Live
 
 # Ensure .env is loaded from the script directory
 SCRIPT_DIR = Path(__file__).resolve().parent
+CONFIG_DIR = Path.home() / ".config" / "venice"
+CONFIG_FILE = CONFIG_DIR / "config.json"
+
 ENV_PATH = SCRIPT_DIR / ".env"
 if ENV_PATH.exists():
     load_dotenv(ENV_PATH)
@@ -46,15 +49,16 @@ BANNER = """
 [bold magenta]╦  ╦╔═╗╔╗╔╦╔═╗╔═╗  ╔═╗╦ ╦╔═╗╔╦╗[/bold magenta]
 [bold cyan]╚╗╔╝║╣ ║║║║║  ║╣   ║  ╠═╣╠═╣ ║ [/bold cyan]
 [bold blue] ╚╝ ╚═╝╝╚╝╩╚═╝╚═╝  ╚═╝╩ ╩╩ ╩ ╩ [/bold blue]
-[dim]Uncensored & Privacy-First AI Terminal Interface[/dim]
+[dim]Uncensored & Privacy-First Venice AI Interface[/dim]
 """
 
 AVAILABLE_MODELS = {
-    "deepseek-v4.1-flash": "DeepSeek V4.1 Flash (Uncensored, 1M context)",
+    "deepseek-v4-1-flash": "DeepSeek V4.1 Flash (Uncensored, 1M context)",
     "zai-org-glm-5-2": "GLM 5.2 (Zhiyuan AI, Code & Reasoning)",
     "venice-uncensored-1-2": "Venice Uncensored 1.2 (Most Uncensored)",
     "default": "Venice Default Model Trait",
     "deepseek-v4-pro": "DeepSeek V4 Pro (1.6T MoE, High Reasoning)",
+    "grok-4-7": "Grok 4.7 (Most Intelligent Trait)",
 }
 
 # Global bridge server reference for clean shutdown
@@ -62,12 +66,52 @@ _BRIDGE_SERVER = None
 _BRIDGE_THREAD = None
 
 
+def get_stored_api_key() -> str:
+    """Reads Venice API key from environment, .env, or ~/.config/venice/config.json."""
+    key = os.getenv("VENICE_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if key and key.strip() and key != "your_venice_api_key_here":
+        return key.strip()
+
+    if CONFIG_FILE.exists():
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                cfg_key = data.get("api_key", "")
+                if cfg_key and cfg_key.strip():
+                    return cfg_key.strip()
+        except Exception:
+            pass
+
+    return ""
+
+
+def save_stored_api_key(api_key: str):
+    """Saves Venice API key to .env and ~/.config/venice/config.json."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump({"api_key": api_key}, f, indent=2)
+
+    # Also update .env in SCRIPT_DIR
+    env_lines = []
+    if ENV_PATH.exists():
+        with open(ENV_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                if not line.startswith("VENICE_API_KEY="):
+                    env_lines.append(line)
+    env_lines.append(f"VENICE_API_KEY={api_key}\n")
+    with open(ENV_PATH, "w", encoding="utf-8") as f:
+        f.writelines(env_lines)
+
+
 class VeniceClient:
-    def __init__(self, backend: str = "free", model: str = "deepseek-v4.1-flash", search: str = "auto"):
-        self.backend = backend
+    def __init__(self, model: str = "deepseek-v4-1-flash", search: str = "auto"):
         self.model = model
+        # Map user alias to exact Venice model ID
+        if self.model in ("deepseek-v4.1-flash", "deepseek-v4.1-flash-uncensored"):
+            self.model = "deepseek-v4-1-flash"
+
         self.search = search
-        self.api_key = os.getenv("VENICE_API_KEY", "")
+        self.api_key = get_stored_api_key()
         self.base_url = os.getenv("VENICE_BASE_URL", "https://api.venice.ai/api/v1")
         self.history: List[Dict[str, str]] = []
         self.system_prompt: str = ""
@@ -76,112 +120,37 @@ class VeniceClient:
         self.history = []
 
     def set_model(self, model: str) -> bool:
+        if model in ("deepseek-v4.1-flash", "deepseek-v4.1-flash-uncensored"):
+            model = "deepseek-v4-1-flash"
         self.model = model
         return model in AVAILABLE_MODELS
 
-    def stream_response(self, user_prompt: str) -> Generator[str, None, None]:
-        """Routes prompt to selected backend and yields tokens."""
-        self.history.append({"role": "user", "content": user_prompt})
-
-        if self.backend == "free":
-            yield from self._stream_free(user_prompt)
-        elif self.backend == "api":
-            yield from self._stream_api(user_prompt)
-        elif self.backend == "web":
-            yield from self._stream_web(user_prompt)
-        else:
-            yield f"[Error] Unknown backend: {self.backend}"
-
-    def _stream_free(self, user_prompt: str) -> Generator[str, None, None]:
-        """Free Engine: routes through local zero-cost DeepSeek V4.1 Flash pipeline."""
-        # 1. Resolve opencode executable cross-platform
-        opencode_bin = shutil.which("opencode") or shutil.which("opencode.cmd") or shutil.which("opencode.exe")
-
-        # Check standard Windows paths if not yet in PATH
-        if not opencode_bin and sys.platform == "win32":
-            local_appdata = os.environ.get("LOCALAPPDATA", "")
-            user_profile = os.environ.get("USERPROFILE", "")
-            possible_paths = [
-                Path(local_appdata) / "Programs" / "opencode" / "bin" / "opencode.cmd",
-                Path(local_appdata) / "Programs" / "opencode" / "opencode.exe",
-                Path(user_profile) / ".opencode" / "bin" / "opencode.cmd",
-                Path(user_profile) / ".opencode" / "bin" / "opencode.exe",
-            ]
-            for p in possible_paths:
-                if p.exists():
-                    opencode_bin = str(p)
-                    break
-
-        if not opencode_bin:
-            # Automatic fallback to Venice API if key is present
-            if self.api_key:
-                yield "[Notice]: OpenCode not found on system PATH. Routing via Venice API...\n\n"
-                yield from self._stream_api(user_prompt)
-                return
-            else:
-                install_cmd = 'powershell -c "irm https://opencode.ai/install.ps1 | iex"' if sys.platform == "win32" else 'curl -fsSL https://opencode.ai/install | bash'
-                yield (
-                    "[Free Engine Notice]: OpenCode CLI is required for offline zero-balance mode.\n"
-                    f"To install it on {sys.platform}, open a terminal and run:\n"
-                    f"  {install_cmd}\n\n"
-                    "Or configure your VENICE_API_KEY in .env and switch to API mode with: /backend api"
-                )
-                return
-
-        try:
-            full_prompt = ""
-            if self.system_prompt:
-                full_prompt += f"System: {self.system_prompt}\n\n"
-            
-            # Context window (last 6 turns)
-            for msg in self.history[-6:]:
-                role = "User" if msg["role"] == "user" else "Assistant"
-                full_prompt += f"{role}: {msg['content']}\n\n"
-            full_prompt += "Assistant: "
-
-            cmd = [opencode_bin, "run", "-m", "opencode/deepseek-v4.1-flash-free", full_prompt]
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,
-                shell=(sys.platform == "win32"),
-            )
-
-            assistant_reply = ""
-            skip_header = True
-            for line in iter(process.stdout.readline, ""):
-                # Filter out opencode status line
-                if skip_header and (line.startswith(">") or line.strip() == ""):
-                    continue
-                skip_header = False
-                assistant_reply += line
-                yield line
-
-            process.stdout.close()
-            process.wait()
-
-            if process.returncode != 0:
-                err = process.stderr.read()
-                if not assistant_reply:
-                    yield f"[Free Engine Error]: {err.strip()}"
-
-            self.history.append({"role": "assistant", "content": assistant_reply.strip()})
-
-        except Exception as e:
-            yield f"\n[Free Engine Exception]: {str(e)}"
-
-    def _stream_api(self, user_prompt: str) -> Generator[str, None, None]:
-        """Official Venice API Engine: implements VENICE_TRANSPORT_SPEC.md exactly."""
-        import httpx
-
+    def ensure_auth(self) -> bool:
+        """Prompts for API key if missing."""
         if not self.api_key:
-            yield "[API Error] VENICE_API_KEY is not configured in .env file."
+            console.print("\n[bold yellow]No Venice API Key detected.[/bold yellow]")
+            console.print("Get your API key at: [link=https://venice.ai/settings/api]https://venice.ai/settings/api[/link]\n")
+            entered = console.input("[bold cyan]Enter your Venice API Key: [/bold cyan]").strip()
+            if entered:
+                self.api_key = entered
+                save_stored_api_key(entered)
+                console.print("[green]✔ Key saved successfully.[/green]\n")
+                return True
+            else:
+                console.print("[red]API Key is required to connect to Venice AI.[/red]")
+                return False
+        return True
+
+    def stream_response(self, user_prompt: str) -> Generator[str, None, None]:
+        """Sends chat completion request to Venice AI following VENICE_TRANSPORT_SPEC.md."""
+        if not self.ensure_auth():
+            yield "[Error] Authentication required. Please provide a valid Venice API key."
             return
 
+        self.history.append({"role": "user", "content": user_prompt})
+
         model_id = self.model
-        if model_id == "deepseek-v4.1-flash":
+        if model_id in ("deepseek-v4.1-flash", "deepseek-v4.1-flash-uncensored"):
             model_id = "deepseek-v4-1-flash"
 
         headers = {
@@ -195,6 +164,7 @@ class VeniceClient:
             messages.append({"role": "system", "content": self.system_prompt})
         messages.extend(self.history)
 
+        # Body conforms to Spec §4 and §6 (strict top-level validation)
         body = {
             "model": model_id,
             "messages": messages,
@@ -219,7 +189,13 @@ class VeniceClient:
                                 msg = msg.get("message", str(msg))
                         except Exception:
                             msg = error_body
-                        yield f"[Venice API Error HTTP {response.status_code}] (CF-RAY: {ray})\n{msg}"
+                        
+                        if response.status_code == 402:
+                            yield f"[Venice Balance Notice] (CF-RAY: {ray})\n{msg}\nVisit https://venice.ai/settings/api to add USD/Diem credits."
+                        elif response.status_code == 401:
+                            yield f"[Venice Auth Error] (CF-RAY: {ray})\nInvalid or expired API key. Please check your key at https://venice.ai/settings/api"
+                        else:
+                            yield f"[Venice API Error HTTP {response.status_code}] (CF-RAY: {ray})\n{msg}"
                         return
 
                     assistant_reply = ""
@@ -238,7 +214,8 @@ class VeniceClient:
                         # Check in-band error (Transport Spec §9.1)
                         if "error" in chunk:
                             err = chunk["error"]
-                            yield f"\n[In-Band Error]: {err.get('message', 'Server error')}"
+                            err_msg = err.get("message", "Server error")
+                            yield f"\n[In-Band Error]: {err_msg}"
                             break
 
                         # Trailing usage chunk with empty choices (Transport Spec §9.1)
@@ -255,36 +232,32 @@ class VeniceClient:
                     self.history.append({"role": "assistant", "content": assistant_reply})
 
         except Exception as e:
-            yield f"\n[API Connection Exception]: {str(e)}"
-
-    def _stream_web(self, user_prompt: str) -> Generator[str, None, None]:
-        """Web Agent Engine: guidance on web session vs local free engine."""
-        yield "[Web Engine]: Free uncensored inference is handled via backend 'free' using the local DeepSeek V4.1 Flash engine. To use it, type /backend free."
+            yield f"\n[Venice Connection Error]: {str(e)}"
 
 
 # ---------------------------------------------------------------------------
-# OpenAI-Compatible Bridge Server
+# OpenAI-Compatible Bridge Server (Local Port Forwarder to Venice AI)
 # ---------------------------------------------------------------------------
 
 def create_bridge_app(client: VeniceClient):
     from fastapi import FastAPI, Request
     from fastapi.responses import StreamingResponse, JSONResponse
 
-    app = FastAPI(title="Venice Local OpenAI Bridge")
+    app = FastAPI(title="Venice AI OpenAI-Compatible Bridge")
 
     @app.get("/v1/models")
     async def list_models():
         return {
             "object": "list",
             "data": [
-                {"id": k, "object": "model", "owned_by": "venice-bridge"}
+                {"id": k, "object": "model", "owned_by": "venice-ai"}
                 for k in AVAILABLE_MODELS
             ]
         }
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "model": client.model, "backend": client.backend}
+        return {"status": "ok", "model": client.model, "endpoint": "venice.ai"}
 
     @app.post("/v1/chat/completions")
     async def chat_completions(req: Request):
@@ -299,7 +272,7 @@ def create_bridge_app(client: VeniceClient):
         if not stream:
             reply = "".join(list(client.stream_response(last_prompt)))
             return {
-                "id": f"chatcmpl-bridge-{int(time.time())}",
+                "id": f"chatcmpl-venice-{int(time.time())}",
                 "object": "chat.completion",
                 "created": int(time.time()),
                 "model": data.get("model", client.model),
@@ -311,7 +284,7 @@ def create_bridge_app(client: VeniceClient):
             }
 
         def event_generator():
-            chat_id = f"chatcmpl-bridge-{int(time.time())}"
+            chat_id = f"chatcmpl-venice-{int(time.time())}"
             for token in client.stream_response(last_prompt):
                 chunk = {
                     "id": chat_id,
@@ -343,7 +316,7 @@ def start_background_bridge(client: VeniceClient, port: int = 8080) -> tuple[boo
     import uvicorn
     import httpx
 
-    # Check if preferred port is running a venice bridge
+    # Check if preferred port is already running a venice bridge
     try:
         r = httpx.get(f"http://127.0.0.1:{port}/health", timeout=0.5)
         if r.status_code == 200:
@@ -392,10 +365,10 @@ def run_interactive_tui(client: VeniceClient, bridge_active: bool = False, port:
     console.print(BANNER)
 
     status_table = Table(show_header=False, box=None, padding=(0, 1))
-    status_table.add_row("[bold cyan]Model:[/bold cyan]", f"[green]{client.model}[/green] ({AVAILABLE_MODELS.get(client.model, 'Custom')})")
-    status_table.add_row("[bold cyan]Backend:[/bold cyan]", f"[yellow]{client.backend.upper()}[/yellow] ({'Zero balance required' if client.backend == 'free' else 'Official API'})")
+    status_table.add_row("[bold cyan]Model:[/bold cyan]", f"[green]{client.model}[/green] ({AVAILABLE_MODELS.get(client.model, 'Venice Model')})")
+    status_table.add_row("[bold cyan]Provider:[/bold cyan]", "[magenta]Venice AI (api.venice.ai)[/magenta]")
     if bridge_active:
-        status_table.add_row("[bold cyan]Bridge:[/bold cyan]", f"[green]Active on http://127.0.0.1:{port}/v1[/green] (OpenCode compatible)")
+        status_table.add_row("[bold cyan]Bridge:[/bold cyan]", f"[green]Active on http://127.0.0.1:{port}/v1[/green] (OpenAI Compatible)")
     status_table.add_row("[bold cyan]Search:[/bold cyan]", f"[blue]{client.search}[/blue]")
     console.print(Panel(status_table, title="[bold]Session Status[/bold]", border_style="dim magenta"))
     console.print("[dim]Type your message below. Type [bold yellow]/help[/bold yellow] for commands or [bold red]/exit[/bold red] to quit.[/dim]\n")
@@ -431,12 +404,14 @@ def run_interactive_tui(client: VeniceClient, bridge_active: bool = False, port:
                         client.set_model(arg)
                         console.print(f"[green]✔ Model changed to: [bold]{client.model}[/bold][/green]\n")
                     continue
-                elif cmd == "/backend":
-                    if arg in ("free", "api", "web"):
-                        client.backend = arg
-                        console.print(f"[green]✔ Backend switched to: [bold]{arg.upper()}[/bold][/green]\n")
+                elif cmd == "/key":
+                    if arg:
+                        client.api_key = arg
+                        save_stored_api_key(arg)
+                        console.print("[green]✔ Venice API key updated.[/green]\n")
                     else:
-                        console.print(f"[cyan]Current backend:[/cyan] [yellow]{client.backend}[/yellow] (options: 'free', 'api', 'web')\n")
+                        masked = (client.api_key[:8] + "..." + client.api_key[-4:]) if client.api_key else "[None]"
+                        console.print(f"[cyan]Current key:[/cyan] {masked}\n")
                     continue
                 elif cmd == "/search":
                     if arg in ("on", "off", "auto"):
@@ -477,9 +452,9 @@ def print_help():
     table.add_column("Command", style="yellow")
     table.add_column("Description")
     table.add_row("/help", "Show this help screen")
-    table.add_row("/model <name>", "Switch model (e.g. /model deepseek-v4.1-flash)")
-    table.add_row("/backend <free|api>", "Switch inference backend ('free' = $0 balance, 'api' = paid Venice API)")
-    table.add_row("/search <on|off|auto>", "Toggle web search & citation parameter")
+    table.add_row("/model <name>", "Switch model (e.g. /model deepseek-v4-1-flash)")
+    table.add_row("/key <api_key>", "Update your Venice API key")
+    table.add_row("/search <on|off|auto>", "Toggle Venice web search parameter")
     table.add_row("/system <prompt>", "Set custom system instructions")
     table.add_row("/clear", "Clear conversation history")
     table.add_row("/save", "Export chat transcript to history/*.md")
@@ -498,7 +473,7 @@ def save_history(client: VeniceClient):
     filepath = history_dir / filename
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(f"# Venice Chat Transcript ({datetime.now().isoformat()})\n")
-        f.write(f"Model: {client.model} | Backend: {client.backend}\n\n---\n\n")
+        f.write(f"Model: {client.model} | Endpoint: {client.base_url}\n\n---\n\n")
         for msg in client.history:
             role = "**User**" if msg["role"] == "user" else "**Venice**"
             f.write(f"### {role}:\n\n{msg['content']}\n\n")
@@ -574,8 +549,7 @@ def main():
         return
 
     parser = argparse.ArgumentParser(description="Venice AI Terminal Chat Interface")
-    parser.add_argument("-m", "--model", default=os.getenv("VENICE_MODEL", "deepseek-v4.1-flash"), help="Model to use")
-    parser.add_argument("-b", "--backend", default=os.getenv("VENICE_BACKEND", "free"), choices=["free", "api", "web"], help="Inference backend")
+    parser.add_argument("-m", "--model", default=os.getenv("VENICE_MODEL", "deepseek-v4-1-flash"), help="Venice model to use")
     parser.add_argument("-p", "--prompt", help="One-shot prompt execution (non-interactive)")
     parser.add_argument("--search", default=os.getenv("ENABLE_WEB_SEARCH", "auto"), help="Web search: auto, on, off")
     parser.add_argument("--port", type=int, default=8080, help="Bridge server port (default: 8080)")
@@ -584,7 +558,7 @@ def main():
 
     args = parser.parse_args()
 
-    client = VeniceClient(backend=args.backend, model=args.model, search=args.search)
+    client = VeniceClient(model=args.model, search=args.search)
 
     # Standalone server mode
     if args.serve:
@@ -602,9 +576,9 @@ def main():
         return
 
     # Standard interactive startup with step information
-    console.print("[bold cyan][1/3][/bold cyan] [white]⚙ Checking environment & dependencies...[/white]")
-    time.sleep(0.2)
-    console.print("      [green]✔ Environment verified (Python 3, OpenCode pipeline)[/green]")
+    console.print("[bold cyan][1/3][/bold cyan] [white]⚙ Checking Venice environment & dependencies...[/white]")
+    time.sleep(0.1)
+    console.print("      [green]✔ Environment verified (Python 3, HTTPX, Venice Transport)[/green]")
 
     bridge_ready = False
     active_port = args.port
@@ -612,14 +586,14 @@ def main():
         console.print(f"[bold cyan][2/3][/bold cyan] [white]🚀 Starting Venice Local Bridge on port {args.port}...[/white]")
         bridge_ready, active_port = start_background_bridge(client, port=args.port)
         if bridge_ready:
-            console.print(f"      [green]✔ Local bridge active on http://127.0.0.1:{active_port}/v1 (OpenCode can connect)[/green]")
+            console.print(f"      [green]✔ Local bridge active on http://127.0.0.1:{active_port}/v1 (OpenAI Compatible)[/green]")
         else:
             console.print("      [yellow]⚠ Local bridge did not start, running in direct client mode[/yellow]")
     else:
         console.print("[bold cyan][2/3][/bold cyan] [dim]Skipping bridge startup (--no-bridge passed)[/dim]")
 
     console.print("[bold cyan][3/3][/bold cyan] [white]💬 Launching Venice Terminal Chat...[/white]\n")
-    time.sleep(0.3)
+    time.sleep(0.2)
 
     try:
         run_interactive_tui(client, bridge_active=bridge_ready, port=active_port)
